@@ -1,19 +1,36 @@
 import math
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
 
-from database import engine, get_db, Base
+from database import engine, get_db, Base, SessionLocal
 from models.customer import Customer
 from services.ingestion import ingest_customers
+
+logger = logging.getLogger("pipeline")
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables on startup if they don't exist
+    # Create tables on startup
     Base.metadata.create_all(bind=engine)
+    # Auto-seed: ingest from Flask if the table is empty
+    db = SessionLocal()
+    try:
+        count = db.query(Customer).count()
+        if count == 0:
+            logger.info("No data found in DB — running initial seed from Flask...")
+            n = ingest_customers(db)
+            logger.info(f"Seeded {n} customer records into PostgreSQL.")
+        else:
+            logger.info(f"DB already has {count} records, skipping auto-seed.")
+    except Exception as exc:
+        logger.warning(f"Auto-seed failed (Flask may not be ready yet): {exc}")
+    finally:
+        db.close()
     yield
 
 
